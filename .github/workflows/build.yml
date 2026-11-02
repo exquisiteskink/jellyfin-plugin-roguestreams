@@ -49,19 +49,10 @@ jobs:
       - name: Install jprm
         run: pip install jprm
 
-      # jprm runs `dotnet build` against the solution in the repo root.
-      # It writes to ./artifacts, which must already exist.
       - name: Package plugin
         run: |
           mkdir -p artifacts
           jprm plugin build . --version "${{ steps.ver.outputs.version }}"
-
-      - name: Build plugin repository manifest
-        run: |
-          mkdir -p repo
-          jprm repo init ./repo/manifest.json
-          jprm repo add ./repo ./artifacts/*.zip \
-            --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -74,6 +65,29 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.zip
+          body_path: CHANGELOG.md
+
+      # Keep every previously published version. Jellyfin's catalog compares
+      # the installed version against this list and shows changelog text per
+      # version. `jprm repo init` on a clean dir would wipe history.
+      - name: Fetch existing plugin repository
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: repo
+
+      - name: Add this version to the plugin repository
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p repo
+          rm -rf repo/.git
+          if [ ! -f repo/manifest.json ]; then
+            jprm repo init ./repo/manifest.json
+          fi
+          jprm repo add ./repo ./artifacts/*.zip \
+            --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
 
       - name: Publish repository to GitHub Pages
         if: startsWith(github.ref, 'refs/tags/')
@@ -82,3 +96,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./repo
           publish_branch: gh-pages
+          keep_files: false

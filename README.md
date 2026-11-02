@@ -79,7 +79,7 @@ To produce an installable package and manifest locally:
 
 ```bash
 pip install jprm
-jprm plugin build . --version 1.1.2.0 --output-dir ./artifact
+jprm plugin build . --version 1.1.3.0 --output-dir ./artifact
 jprm repo add ./artifact/*.zip --output-dir ./repo
 ```
 
