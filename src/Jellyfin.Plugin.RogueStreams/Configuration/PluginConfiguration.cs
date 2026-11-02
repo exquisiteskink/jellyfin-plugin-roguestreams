@@ -8,8 +8,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public string TunerUrl { get; set; } = "";
 
     /// <summary>
-    /// Gets or sets how long a stream must stay orphaned before the UI offers to kill it.
-    /// A channel change legitimately holds two tuners for a few seconds.
+    /// Unused: closing is always manual. Kept so existing config XML still deserializes.
     /// </summary>
     public int GraceSeconds { get; set; } = 20;
 }

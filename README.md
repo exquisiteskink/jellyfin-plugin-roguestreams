@@ -1,48 +1,47 @@
-# Rogue Streams — a Jellyfin Live TV watchdog plugin
+# Rogue Streams — a Jellyfin Live TV stream closer
 
-Finds the Live TV transcodes that nobody is watching and kills them one at a time, from
-the Jellyfin dashboard.
+Shows every **open Live TV stream** in this Jellyfin process, including ones
+Dashboard → Active Sessions cannot see, and lets you close them one at a time.
+
+Nothing is closed automatically.
 
 ## The problem it solves
 
-When a channel change or a crashed client leaves an orphaned ffmpeg running against the
-HDHomeRun, the tuner stays leased to the server with no viewer attached. Jellyfin's
-**Dashboard → Active Sessions** cannot show these: the session object is gone, and the
-ghost is a process holding a shared stream consumer, not a session. The result is a
-tuner that looks in use, a channel change that hangs, and transcode segments piling up
-on disk.
+A channel change or a crashed client can leave Jellyfin's `SharedHttpStream`
+copying from the tuner to disk with nobody watching. The session is gone, the
+tuner stays leased, and the next channel change hangs.
 
-`pkill -f ffmpeg` fixes it by killing every stream, including the one someone is
-watching. This plugin targets only the orphan.
+Killing ffmpeg does **not** fix that: it drops the consumer and often *leaves*
+the copy loop running. This plugin calls `IMediaSourceManager.CloseLiveStream`,
+which is the same path as `POST /LiveStreams/Close`.
 
 ## What it shows
 
 | Panel | Content |
 | --- | --- |
-| Transcodes | every ffmpeg process on a tuner URL: channel, pid, uptime, and whether a session or recording accounts for it |
-| Tuner leases | live `/status.json` per tuner: channel, name, target IP, bitrate |
-| Watching now | live TV sessions with user, device, channel, play method |
+| Open live streams | every stream in Jellyfin's open-stream map: name, liveStreamId, consumer count, viewers, recordings, cache file size |
+| Tuner leases | live HDHomeRun `/status.json` (optional): channel, name, target IP, bitrate |
+| Watching now | live TV sessions with user, device, client, channel |
+| Recordings | in-progress DVR timers |
 
-Orphans are marked **nobody** and get a **Kill** button.
+Every listed stream has a **Close** button. If a viewer or recording is attached,
+the UI warns before closing.
 
-## How it decides
+## How close works
 
-1. Reads `VctNumber`/`VctName`/`TargetIP`/`NetworkRate` from the tuner's `/status.json`.
-2. Reads live sessions from `ISessionManager`, taking `NowPlayingItem.ChannelNumber`.
-3. Reads each ffmpeg's `/proc/<pid>/cmdline` and extracts the channel from the tuner URL
-   (`.../native/v8.1` → `8.1`). This is Jellyfin's numbering, which is why the process is
-   matched on its own URL and never on the tuner's channel number — those disagree
-   (`VctNumber` `19.10` is the channel Jellyfin calls `19.1`).
-4. A transcode whose channel has no session and no in-progress recording is an orphan.
+1. Reads open streams from Jellyfin (`MediaSourceManager`'s live-stream map).
+2. Matches sessions by `PlayState.LiveStreamId`.
+3. Matches in-progress timers from `ILiveTvManager`.
+4. `POST /RogueStreams/Close` calls `CloseLiveStream` until that id is gone, so a
+   leaked consumer count still releases the tuner.
 
-### Safety rails
+Administrator role is required. Closing a stream that is actually in use will
+stop that viewer or recording — that is intentional so you can clear a stuck
+tuner.
 
-- `POST /RogueStreams/Kill/{pid}` **recomputes the orphan set before acting** and refuses a
-  pid whose channel is protected.
-- If a live session is playing but Jellyfin will not report its channel, the plugin
-  refuses to kill anything rather than guess.
-- Killing releases the tuner: the lease dies with the process reading it.
-- Administrator role required on both endpoints.
+If Close leaves the stream open, or a tuner stays leased with no open stream,
+restart the Jellyfin **process** (a dashboard restart often does not drop
+`SharedHttpStream`).
 
 ## Install
 
@@ -80,7 +79,7 @@ To produce an installable package and manifest locally:
 
 ```bash
 pip install jprm
-jprm plugin build . --version 1.0.0.0 --output-dir ./artifact
+jprm plugin build . --version 1.1.0.0 --output-dir ./artifact
 jprm repo add ./artifact/*.zip --output-dir ./repo
 ```
 
@@ -90,14 +89,14 @@ jprm repo add ./artifact/*.zip --output-dir ./repo
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `TunerUrl` | `` | HDHomeRun base URL used for `/status.json` |
-| `GraceSeconds` | `20` | reserved; the UI reports uptime so you decide when a stream is stale |
+| `TunerUrl` | `` | HDHomeRun base URL used for `/status.json`. Closing does not need this. |
+| `GraceSeconds` | `20` | unused; closing is always manual |
 
 ## Compatibility
 
 - Jellyfin 12.4.0 (`targetAbi` 12.4.0.0), `net10.0`.
-- HDHomeRun tuners: the `/status.json` fields the plugin reads are HDHomeRun-specific.
-  M3U and other tuner types will show transcodes but no lease panel.
+- HDHomeRun `/status.json` is optional context. M3U and other tuners still list
+  and close Jellyfin's open live streams.
 
 ## Licence
 

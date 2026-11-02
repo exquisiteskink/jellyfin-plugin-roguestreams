@@ -8,8 +8,7 @@ using MediaBrowser.Model.Serialization;
 namespace Jellyfin.Plugin.RogueStreams;
 
 /// <summary>
-/// Lists every Live TV transcode running in this server, flags the ones no session
-/// and no recording accounts for, and kills them one at a time.
+/// Lists Jellyfin's open Live TV streams and closes them one at a time.
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
@@ -24,7 +23,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override string Name => "Rogue Streams";
 
     public override string Description =>
-        "Shows Live TV transcodes and tuner leases, including orphans that the dashboard's session list cannot see, and kills an individual orphan.";
+        "Shows every open Live TV stream (including ones Active Sessions cannot see) and closes an individual stream so its tuner is released.";
 
     public override Guid Id => Guid.Parse("7f1c2a54-9b3d-4c6e-8a10-2c9e5d4b7f31");
 

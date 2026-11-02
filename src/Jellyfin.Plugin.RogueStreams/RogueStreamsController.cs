@@ -1,16 +1,17 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.LiveTv;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -30,50 +31,81 @@ public sealed class LiveSessionInfo
 {
     public string User { get; set; } = string.Empty;
     public string Device { get; set; } = string.Empty;
+    public string Client { get; set; } = string.Empty;
     public string PlayMethod { get; set; } = string.Empty;
     public string Channel { get; set; } = string.Empty;
+    public string ItemName { get; set; } = string.Empty;
+    public string? LiveStreamId { get; set; }
 }
 
-public sealed class TranscodeInfo
+public sealed class RecordingInfo
 {
-    public int Pid { get; set; }
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
     public string Channel { get; set; } = string.Empty;
-    public double RunningSeconds { get; set; }
-    public bool Rogue { get; set; }
-    public bool Protected { get; set; }
+    public string Status { get; set; } = string.Empty;
+}
+
+public sealed class ViewerInfo
+{
+    public string User { get; set; } = string.Empty;
+    public string Device { get; set; } = string.Empty;
+}
+
+public sealed class LiveStreamRow
+{
+    public string LiveStreamId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string TunerHostId { get; set; } = string.Empty;
+    public int ConsumerCount { get; set; }
+    public string? Path { get; set; }
+    public long? FileBytes { get; set; }
+    public List<ViewerInfo> Viewers { get; set; } = new();
+    public List<string> Recordings { get; set; } = new();
+    public bool InUse => Viewers.Count > 0 || Recordings.Count > 0;
 }
 
 public sealed class StatusResult
 {
+    public List<LiveStreamRow> Streams { get; set; } = new();
     public List<TunerLease> Tuners { get; set; } = new();
     public List<LiveSessionInfo> Sessions { get; set; } = new();
-    public List<TranscodeInfo> Transcodes { get; set; } = new();
-    public List<string> ProtectedChannels { get; set; } = new();
-    public List<TunerLease> UnmatchedLeases { get; set; } = new();
-    public bool UnresolvedViewer { get; set; }
-    public string? Refusal { get; set; }
-    public int GraceSeconds { get; set; }
+    public List<RecordingInfo> Recordings { get; set; } = new();
+    public string? Note { get; set; }
+}
+
+public sealed class CloseRequest
+{
+    public string LiveStreamId { get; set; } = string.Empty;
 }
 
 /// <summary>
-/// Enumerates and kills individual Live TV transcodes.
+/// Lists Jellyfin's open Live TV streams and closes them through IMediaSourceManager.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("RogueStreams")]
 public class RogueStreamsController : ControllerBase
 {
+    private const int MaxClosePasses = 16;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private static readonly BindingFlags StreamMapFlags =
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
-    // .../native/v8.1  or  .../auto/v19.1 — the channel as Jellyfin numbers it.
-    private static readonly Regex ChannelInUrl = new(@"/v([0-9]+(?:\.[0-9]+)?)(?![0-9.])", RegexOptions.Compiled);
-
+    private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISessionManager _sessionManager;
+    private readonly ILiveTvManager _liveTvManager;
     private readonly ILogger<RogueStreamsController> _logger;
 
-    public RogueStreamsController(ISessionManager sessionManager, ILogger<RogueStreamsController> logger)
+    public RogueStreamsController(
+        IMediaSourceManager mediaSourceManager,
+        ISessionManager sessionManager,
+        ILiveTvManager liveTvManager,
+        ILogger<RogueStreamsController> logger)
     {
+        _mediaSourceManager = mediaSourceManager;
         _sessionManager = sessionManager;
+        _liveTvManager = liveTvManager;
         _logger = logger;
     }
 
@@ -89,48 +121,54 @@ public class RogueStreamsController : ControllerBase
     }
 
     /// <summary>
-    /// Kills one transcode. Re-validates that the pid is still an orphan right now;
-    /// a pid that belongs to someone playing is refused even if the UI asked for it.
+    /// Closes one open live stream via CloseLiveStream, repeating until it leaves
+    /// the open-stream map so a leaked consumer count still releases the tuner.
     /// </summary>
-    [HttpPost("Kill/{pid:int}")]
-    public async Task<ActionResult<StatusResult>> Kill(int pid, CancellationToken ct)
+    [HttpPost("Close")]
+    public async Task<ActionResult<StatusResult>> Close([FromBody] CloseRequest request, CancellationToken ct)
     {
         if (!IsAdmin())
         {
             return Forbid();
         }
 
-        var status = await BuildStatusAsync(ct).ConfigureAwait(false);
-
-        if (status.Refusal is not null)
+        var id = request.LiveStreamId?.Trim();
+        if (string.IsNullOrEmpty(id))
         {
-            return Conflict(new { message = status.Refusal });
+            return BadRequest(new { message = "liveStreamId is required." });
         }
 
-        var target = status.Transcodes.FirstOrDefault(t => t.Pid == pid);
-        if (target is null)
+        if (_mediaSourceManager.GetLiveStreamInfo(id) is null)
         {
-            return NotFound(new { message = $"No transcode with pid {pid} is running." });
-        }
-
-        if (!target.Rogue)
-        {
-            return Conflict(new { message = $"pid {pid} is on channel {target.Channel}, which is protected by a live session or recording. Not killing it." });
+            return NotFound(new { message = "That live stream is not open." });
         }
 
         try
         {
-            using var proc = Process.GetProcessById(pid);
-            proc.Kill();
-            _logger.LogWarning("Rogue Streams: killed orphaned live TV transcode pid {Pid} on channel {Channel}", pid, target.Channel);
+            for (var i = 0; i < MaxClosePasses; i++)
+            {
+                if (_mediaSourceManager.GetLiveStreamInfo(id) is null)
+                {
+                    break;
+                }
+
+                await _mediaSourceManager.CloseLiveStream(id).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Rogue Streams: failed to kill pid {Pid}", pid);
-            return Conflict(new { message = $"Could not kill pid {pid}: {ex.Message}" });
+            _logger.LogError(ex, "Rogue Streams: failed to close live stream {LiveStreamId}", id);
+            return Conflict(new { message = $"Could not close stream: {ex.Message}" });
         }
 
-        await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+        if (_mediaSourceManager.GetLiveStreamInfo(id) is not null)
+        {
+            _logger.LogWarning("Rogue Streams: live stream {LiveStreamId} still open after {Passes} CloseLiveStream calls", id, MaxClosePasses);
+            return Conflict(new { message = "Jellyfin still has this stream open after repeated CloseLiveStream calls. A process restart may be required." });
+        }
+
+        _logger.LogWarning("Rogue Streams: closed live stream {LiveStreamId}", id);
+        await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
         return await BuildStatusAsync(ct).ConfigureAwait(false);
     }
 
@@ -142,54 +180,241 @@ public class RogueStreamsController : ControllerBase
 
     private async Task<StatusResult> BuildStatusAsync(CancellationToken ct)
     {
-        var result = new StatusResult { GraceSeconds = Plugin.Instance?.Configuration.GraceSeconds ?? 20 };
+        var result = new StatusResult();
+        var recordings = await GetActiveRecordingsAsync(ct).ConfigureAwait(false);
+        result.Recordings = recordings;
 
-        // 1. Who is legitimately watching, by channel.
         foreach (var session in _sessionManager.Sessions)
         {
             var item = session.NowPlayingItem;
-            if (item is null)
+            var liveStreamId = session.PlayState?.LiveStreamId;
+            if (item is null && string.IsNullOrEmpty(liveStreamId))
             {
                 continue;
             }
 
-            var number = item.ChannelNumber;
-            var isLive = item.IsLive == true || item.ChannelId is not null;
-
-            if (!isLive)
+            if (!IsLiveTvSession(session))
             {
                 continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(number))
-            {
-                // A live viewer whose channel Jellyfin will not name: nothing may be killed.
-                result.UnresolvedViewer = true;
-                number = "?";
-            }
-            else
-            {
-                result.ProtectedChannels.Add(number!);
             }
 
             result.Sessions.Add(new LiveSessionInfo
             {
                 User = session.UserName ?? "?",
                 Device = session.DeviceName ?? "?",
+                Client = session.Client ?? "?",
                 PlayMethod = session.PlayState?.PlayMethod?.ToString() ?? "?",
-                Channel = number ?? "?"
+                Channel = ChannelLabel(item),
+                ItemName = item?.Name ?? string.Empty,
+                LiveStreamId = string.IsNullOrEmpty(liveStreamId) ? null : liveStreamId
             });
         }
 
-        result.ProtectedChannels = result.ProtectedChannels.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-
-        if (result.UnresolvedViewer)
+        var open = EnumerateOpenLiveStreams();
+        if (open is null)
         {
-            result.Refusal = "A live session is playing but Jellyfin does not report its channel, so no transcode can be proven to be nobody's.";
+            result.Note = "Could not enumerate Jellyfin's open live-stream map; listing sessions and tuners only. Close still works if you paste a liveStreamId from a session.";
+            open = Array.Empty<KeyValuePair<string, ILiveStream>>();
         }
 
-        // 2. What the tuners say is locked.
-        var tunerUrl = Plugin.Instance?.Configuration.TunerUrl ?? "";
+        foreach (var entry in open)
+        {
+            var stream = entry.Value;
+            var source = stream.MediaSource;
+            var path = source?.Path;
+            result.Streams.Add(new LiveStreamRow
+            {
+                LiveStreamId = entry.Key,
+                Name = StreamName(source, stream),
+                TunerHostId = stream.TunerHostId ?? string.Empty,
+                ConsumerCount = stream.ConsumerCount,
+                Path = string.IsNullOrEmpty(path) ? null : Path.GetFileName(path),
+                FileBytes = TryFileLength(path),
+                Viewers = result.Sessions
+                    .Where(s => string.Equals(s.LiveStreamId, entry.Key, StringComparison.OrdinalIgnoreCase))
+                    .Select(s => new ViewerInfo { User = s.User, Device = s.Device })
+                    .ToList(),
+                Recordings = recordings
+                    .Where(r => RecordingMatches(r, source, stream))
+                    .Select(r => r.Name)
+                    .ToList()
+            });
+        }
+
+        result.Streams = result.Streams
+            .OrderByDescending(s => s.InUse)
+            .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        await FillTunersAsync(result, ct).ConfigureAwait(false);
+        return result;
+    }
+
+    private static bool IsLiveTvSession(SessionInfo session)
+    {
+        if (!string.IsNullOrEmpty(session.PlayState?.LiveStreamId))
+        {
+            return true;
+        }
+
+        var item = session.NowPlayingItem;
+        if (item is null)
+        {
+            return false;
+        }
+
+        var type = item.Type.ToString();
+        return type.Contains("TvChannel", StringComparison.OrdinalIgnoreCase)
+               || type.Contains("LiveTv", StringComparison.OrdinalIgnoreCase)
+               || item.ChannelId != Guid.Empty;
+    }
+
+    private static string ChannelLabel(MediaBrowser.Model.Dto.BaseItemDto? item)
+    {
+        if (item is null)
+        {
+            return "?";
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.ChannelNumber) && !string.IsNullOrWhiteSpace(item.ChannelName))
+        {
+            return item.ChannelNumber + " " + item.ChannelName;
+        }
+
+        return item.ChannelName
+               ?? item.ChannelNumber
+               ?? item.Name
+               ?? "?";
+    }
+
+    private static string StreamName(MediaBrowser.Model.Dto.MediaSourceInfo? source, ILiveStream stream)
+    {
+        if (!string.IsNullOrWhiteSpace(source?.Name))
+        {
+            return source!.Name;
+        }
+
+        if (!string.IsNullOrWhiteSpace(source?.Path))
+        {
+            return Path.GetFileName(source!.Path) ?? stream.UniqueId;
+        }
+
+        return stream.UniqueId;
+    }
+
+    private static bool RecordingMatches(RecordingInfo recording, MediaBrowser.Model.Dto.MediaSourceInfo? source, ILiveStream stream)
+    {
+        if (!string.IsNullOrEmpty(recording.Channel) && !string.IsNullOrEmpty(source?.Name)
+            && source.Name.Contains(recording.Channel, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(recording.Id)
+            && (stream.OriginalStreamId?.Contains(recording.Id, StringComparison.OrdinalIgnoreCase) == true
+                || source?.Id?.Contains(recording.Id, StringComparison.OrdinalIgnoreCase) == true))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrEmpty(recording.Channel)
+               && stream.OriginalStreamId?.Contains(recording.Channel, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private async Task<List<RecordingInfo>> GetActiveRecordingsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var timers = await _liveTvManager.GetTimers(
+                new TimerQuery { IsActive = true },
+                ct).ConfigureAwait(false);
+
+            return (timers.Items ?? [])
+                .Where(t => t.Status == RecordingStatus.InProgress)
+                .Select(t => new RecordingInfo
+                {
+                    Id = t.Id ?? string.Empty,
+                    Name = t.Name ?? "Recording",
+                    Channel = t.ChannelName
+                               ?? (t.ChannelId == Guid.Empty ? string.Empty : t.ChannelId.ToString("N")),
+                    Status = t.Status.ToString()
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Rogue Streams: could not list active recordings");
+            return new List<RecordingInfo>();
+        }
+    }
+
+    private IReadOnlyList<KeyValuePair<string, ILiveStream>>? EnumerateOpenLiveStreams()
+    {
+        var manager = _mediaSourceManager;
+        var type = manager.GetType();
+
+        foreach (var field in type.GetFields(StreamMapFlags))
+        {
+            object? value;
+            try
+            {
+                value = field.GetValue(manager);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (value is ConcurrentDictionary<string, ILiveStream> typed)
+            {
+                return typed.ToArray();
+            }
+        }
+
+        foreach (var field in type.GetFields(StreamMapFlags))
+        {
+            object? value;
+            try
+            {
+                value = field.GetValue(manager);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (value is not System.Collections.IDictionary dict)
+            {
+                continue;
+            }
+
+            var list = new List<KeyValuePair<string, ILiveStream>>();
+            foreach (System.Collections.DictionaryEntry entry in dict)
+            {
+                if (entry.Key is string key && entry.Value is ILiveStream stream)
+                {
+                    list.Add(new KeyValuePair<string, ILiveStream>(key, stream));
+                }
+            }
+
+            if (list.Count > 0 || field.Name.Contains("open", StringComparison.OrdinalIgnoreCase))
+            {
+                return list;
+            }
+        }
+
+        _logger.LogWarning("Rogue Streams: no open-stream map found on {Type}", type.FullName);
+        return null;
+    }
+
+    private async Task FillTunersAsync(StatusResult result, CancellationToken ct)
+    {
+        var tunerUrl = Plugin.Instance?.Configuration.TunerUrl;
+        if (string.IsNullOrWhiteSpace(tunerUrl))
+        {
+            return;
+        }
+
         try
         {
             using var resp = await Http.GetAsync($"{tunerUrl.TrimEnd('/')}/status.json", ct).ConfigureAwait(false);
@@ -206,7 +431,7 @@ public class RogueStreamsController : ControllerBase
                 result.Tuners.Add(new TunerLease
                 {
                     Resource = Str(el, "Resource"),
-                    Channel = number!,
+                    Channel = number,
                     Name = Str(el, "VctName"),
                     TargetIp = Str(el, "TargetIP"),
                     NetworkRate = Num(el, "NetworkRate")
@@ -215,70 +440,21 @@ public class RogueStreamsController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Rogue Streams: tuner status unavailable at {Url}", tunerUrl);
-            result.Refusal ??= $"Tuner at {tunerUrl} did not answer, so leases cannot be verified.";
+            _logger.LogDebug(ex, "Rogue Streams: tuner status unavailable at {Url}", tunerUrl);
         }
-
-        // 3. Which transcodes are running, and on what channel.
-        foreach (var proc in Process.GetProcesses())
-        {
-            try
-            {
-                if (!proc.ProcessName.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase))
-                {
-                    proc.Dispose();
-                    continue;
-                }
-
-                var cmdline = ReadCmdline(proc.Id);
-                if (cmdline is null)
-                {
-                    proc.Dispose();
-                    continue;
-                }
-
-                var m = ChannelInUrl.Match(cmdline);
-                if (!m.Success)
-                {
-                    proc.Dispose();
-                    continue;
-                }
-
-                var channel = m.Groups[1].Value;
-                var age = (DateTime.Now - proc.StartTime).TotalSeconds;
-
-                result.Transcodes.Add(new TranscodeInfo
-                {
-                    Pid = proc.Id,
-                    Channel = channel,
-                    RunningSeconds = Math.Round(age, 1),
-                    Protected = result.ProtectedChannels.Contains(channel, StringComparer.OrdinalIgnoreCase),
-                    Rogue = !result.ProtectedChannels.Contains(channel, StringComparer.OrdinalIgnoreCase)
-                });
-                proc.Dispose();
-            }
-            catch
-            {
-                proc.Dispose();
-            }
-        }
-
-        result.Transcodes = result.Transcodes.OrderBy(t => t.Channel).ToList();
-
-        // 4. Tuner leases nobody accounts for: context for the operator, not killable here.
-        result.UnmatchedLeases = result.Tuners
-            .Where(t => !result.ProtectedChannels.Contains(t.Channel, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-
-        return result;
     }
 
-    private static string? ReadCmdline(int pid)
+    private static long? TryFileLength(string? path)
     {
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
         try
         {
-            var raw = System.IO.File.ReadAllText($"/proc/{pid}/cmdline").Replace('\0', ' ');
-            return raw.Length == 0 ? null : raw;
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : null;
         }
         catch
         {
@@ -288,7 +464,12 @@ public class RogueStreamsController : ControllerBase
 
     private static string Str(JsonElement el, string name)
     {
-        return el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+        if (!el.TryGetProperty(name, out var v))
+        {
+            return string.Empty;
+        }
+
+        return v.ValueKind == JsonValueKind.String
             ? v.GetString() ?? string.Empty
             : v.ValueKind == JsonValueKind.Number ? v.ToString() : string.Empty;
     }
