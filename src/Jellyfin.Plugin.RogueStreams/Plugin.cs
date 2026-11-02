@@ -29,6 +29,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     public IEnumerable<PluginPageInfo> GetPages()
     {
+        var ns = GetType().Namespace;
         return new[]
         {
             new PluginPageInfo
@@ -38,7 +39,12 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 EnableInMainMenu = true,
                 MenuSection = "server",
                 MenuIcon = "live_tv",
-                EmbeddedResourcePath = GetType().Namespace + ".Web.roguestreams.html"
+                EmbeddedResourcePath = ns + ".Web.roguestreams.html"
+            },
+            new PluginPageInfo
+            {
+                Name = Name + ".js",
+                EmbeddedResourcePath = ns + ".Web.roguestreams.js"
             }
         };
     }

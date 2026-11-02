@@ -1,7 +1,7 @@
 ---
 name: "Rogue Streams"
 guid: "7f1c2a54-9b3d-4c6e-8a10-2c9e5d4b7f31"
-version: "1.1.3.0"
+version: "1.1.4.0"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "List and close open Live TV streams from the dashboard."
@@ -14,9 +14,9 @@ owner: "exquisiteskink"
 artifacts:
   - "Jellyfin.Plugin.RogueStreams.dll"
 changelog: |-
+  ### 1.1.4.0
+  - Load the dashboard page as a Jellyfin plugin view with a separate controller script
+  - Inline scripts were ignored, so the stream table never filled
   ### 1.1.3.0
   - Publish a per-version changelog so the Jellyfin catalog can offer updates
   - Keep previous versions in the plugin repository manifest
-  - Show Rogue Streams under the dashboard Server menu
-  - Fix empty stream list while Live TV is playing
-  - List and close streams with CloseLiveStream; do not kill ffmpeg

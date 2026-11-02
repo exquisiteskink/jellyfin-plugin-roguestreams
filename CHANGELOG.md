@@ -3,6 +3,11 @@
 All notable changes to this project are documented here. Jellyfin shows the
 `changelog` from `build.yaml` on each catalog version.
 
+## 1.1.4.0
+
+- Load the dashboard page as a Jellyfin plugin view (`pluginConfigurationPage` + `Rogue Streams.js`)
+- Inline scripts were ignored, so the stream table never filled
+
 ## 1.1.3.0
 
 - Publish a per-version changelog so the Jellyfin catalog can offer updates

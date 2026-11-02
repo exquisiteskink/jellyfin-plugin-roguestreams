@@ -177,7 +177,12 @@ public class RogueStreamsController : ControllerBase
                 continue;
             }
 
-            if (!IsLiveTvSession(session))
+            if (!IsLiveTvSession(session) && string.IsNullOrEmpty(liveStreamId) && item is null)
+            {
+                continue;
+            }
+
+            if (!IsLiveTvSession(session) && string.IsNullOrEmpty(liveStreamId))
             {
                 continue;
             }

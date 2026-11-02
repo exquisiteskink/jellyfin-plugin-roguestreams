@@ -1,212 +1,57 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Rogue Streams</title>
-</head>
-<body>
-<div id="rsRoot" style="padding:1em 1.5em; max-width:1200px;">
-    <h1 style="margin:0 0 .25em;">Rogue Streams</h1>
-    <p style="margin:0 0 1em; opacity:.75;">
-        Open Live TV streams inside this Jellyfin process. Close releases the tuner through
-        <code>CloseLiveStream</code> &mdash; it does not kill ffmpeg. Closing a stream that is
-        actually being watched or recorded will stop that viewer or recording.
-    </p>
-
-    <div id="rsNote" style="display:none; background:#3a3418; color:#ffe9a8; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
-    <div id="rsError" style="display:none; background:#5a1f1f; color:#ffd7d7; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
-
-    <div style="display:flex; gap:2em; flex-wrap:wrap;">
-        <div style="flex:1 1 620px;">
-            <h2 style="font-size:1.05em; margin:.5em 0;">Open live streams</h2>
-            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
-                <thead>
-                <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
-                    <th style="padding:.3em .4em;">Stream</th>
-                    <th style="padding:.3em .4em;">Consumers</th>
-                    <th style="padding:.3em .4em;">Who</th>
-                    <th style="padding:.3em .4em;">File</th>
-                    <th style="padding:.3em .4em;"></th>
-                </tr>
-                </thead>
-                <tbody id="rsStreams"></tbody>
-            </table>
+<div id="RogueStreamsPage" data-role="page" class="page type-interior pluginConfigurationPage fullWidthContent" data-controller="__plugin/Rogue Streams.js">
+    <div class="content-primary">
+        <div class="sectionTitleContainer">
+            <h1 class="sectionTitle">Rogue Streams</h1>
         </div>
-        <div style="flex:1 1 380px;">
-            <h2 style="font-size:1.05em; margin:.5em 0;">Tuner leases</h2>
-            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
-                <thead>
-                <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
-                    <th style="padding:.3em .4em;">Tuner</th>
-                    <th style="padding:.3em .4em;">Channel</th>
-                    <th style="padding:.3em .4em;">Name</th>
-                    <th style="padding:.3em .4em;">Rate</th>
-                </tr>
-                </thead>
-                <tbody id="rsTuners"></tbody>
-            </table>
-            <h2 style="font-size:1.05em; margin:1.2em 0 .3em;">Watching now</h2>
-            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
-                <tbody id="rsSessions"></tbody>
-            </table>
-            <h2 style="font-size:1.05em; margin:1.2em 0 .3em;">Recordings</h2>
-            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
-                <tbody id="rsRecordings"></tbody>
-            </table>
+        <p class="fieldDescription">
+            Open Live TV streams inside this Jellyfin process. Close releases the tuner through
+            CloseLiveStream &mdash; it does not kill ffmpeg. Closing a stream that is actually
+            being watched or recorded will stop that viewer or recording.
+        </p>
+
+        <div id="rsNote" class="fieldDescription" style="display:none; background:#3a3418; color:#ffe9a8; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
+        <div id="rsError" class="fieldDescription" style="display:none; background:#5a1f1f; color:#ffd7d7; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
+
+        <div style="display:flex; gap:2em; flex-wrap:wrap;">
+            <div style="flex:1 1 620px;">
+                <h2 class="sectionTitle" style="font-size:1.05em;">Open live streams</h2>
+                <table class="detailTable" style="width:100%; border-collapse:collapse; font-size:.92em;">
+                    <thead>
+                    <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
+                        <th style="padding:.3em .4em;">Stream</th>
+                        <th style="padding:.3em .4em;">Consumers</th>
+                        <th style="padding:.3em .4em;">Who</th>
+                        <th style="padding:.3em .4em;">File</th>
+                        <th style="padding:.3em .4em;"></th>
+                    </tr>
+                    </thead>
+                    <tbody id="rsStreams"></tbody>
+                </table>
+            </div>
+            <div style="flex:1 1 380px;">
+                <h2 class="sectionTitle" style="font-size:1.05em;">Tuner leases</h2>
+                <table class="detailTable" style="width:100%; border-collapse:collapse; font-size:.92em;">
+                    <thead>
+                    <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
+                        <th style="padding:.3em .4em;">Tuner</th>
+                        <th style="padding:.3em .4em;">Channel</th>
+                        <th style="padding:.3em .4em;">Name</th>
+                        <th style="padding:.3em .4em;">Rate</th>
+                    </tr>
+                    </thead>
+                    <tbody id="rsTuners"></tbody>
+                </table>
+                <h2 class="sectionTitle" style="font-size:1.05em; margin-top:1.2em;">Watching now</h2>
+                <table class="detailTable" style="width:100%; border-collapse:collapse; font-size:.92em;">
+                    <tbody id="rsSessions"></tbody>
+                </table>
+                <h2 class="sectionTitle" style="font-size:1.05em; margin-top:1.2em;">Recordings</h2>
+                <table class="detailTable" style="width:100%; border-collapse:collapse; font-size:.92em;">
+                    <tbody id="rsRecordings"></tbody>
+                </table>
+            </div>
         </div>
+
+        <p id="rsStamp" class="fieldDescription" style="opacity:.55; margin-top:1.5em;"></p>
     </div>
-
-    <p id="rsStamp" style="opacity:.55; font-size:.85em; margin-top:1.5em;"></p>
 </div>
-
-<script type="text/javascript">
-    (function () {
-        function req(method, path, body) {
-            if (!window.ApiClient) {
-                return Promise.reject(new Error('ApiClient is not available on this page.'));
-            }
-            var url = ApiClient.getUrl('RogueStreams' + path);
-            if (method === 'GET') {
-                return ApiClient.getJSON(url);
-            }
-            return ApiClient.ajax({
-                type: method,
-                url: url,
-                data: JSON.stringify(body || {}),
-                contentType: 'application/json',
-                dataType: 'json'
-            });
-        }
-
-        function bytes(n) {
-            if (n == null) { return ''; }
-            if (n < 1048576) { return Math.round(n / 1024) + ' KB'; }
-            if (n < 1073741824) { return (n / 1048576).toFixed(1) + ' MB'; }
-            return (n / 1073741824).toFixed(2) + ' GB';
-        }
-
-        function who(stream) {
-            var bits = [];
-            (stream.viewers || []).forEach(function (v) {
-                bits.push(v.user + ' @ ' + v.device);
-            });
-            (stream.recordings || []).forEach(function (r) {
-                bits.push('rec: ' + r);
-            });
-            if (!bits.length) {
-                return '<span style="color:#ff9b8a;">nobody</span>';
-            }
-            return '<span style="color:#7bd88f;">' + bits.join('<br>') + '</span>';
-        }
-
-        function render(d) {
-            var note = document.getElementById('rsNote');
-            if (d.note) {
-                note.style.display = 'block';
-                note.textContent = d.note;
-            } else {
-                note.style.display = 'none';
-            }
-            document.getElementById('rsError').style.display = 'none';
-
-            var tb = document.getElementById('rsStreams');
-            tb.innerHTML = '';
-            if (!d.streams.length) {
-                tb.innerHTML = '<tr><td colspan="5" style="padding:.5em .4em; opacity:.6;">No open live streams in this Jellyfin process.</td></tr>';
-            }
-            d.streams.forEach(function (s) {
-                var tr = document.createElement('tr');
-                tr.style.borderBottom = '1px solid rgba(255,255,255,.07)';
-                tr.innerHTML =
-                    '<td style="padding:.4em;">' +
-                        '<div>' + (s.name || 'live stream') + '</div>' +
-                        '<div style="opacity:.5; font-size:.85em; word-break:break-all;">' + s.liveStreamId + '</div>' +
-                    '</td>' +
-                    '<td style="padding:.4em; opacity:.8;">' + s.consumerCount + '</td>' +
-                    '<td style="padding:.4em;">' + who(s) + '</td>' +
-                    '<td style="padding:.4em; opacity:.7;">' +
-                        (s.path ? s.path : '') +
-                        (s.fileBytes != null ? '<div>' + bytes(s.fileBytes) + '</div>' : '') +
-                    '</td>' +
-                    '<td style="padding:.4em; text-align:right;"></td>';
-
-                var btn = document.createElement('button');
-                btn.className = 'raised button-cancel';
-                btn.textContent = 'Close';
-                btn.onclick = function () {
-                    var warn = s.inUse
-                        ? 'This stream looks in use (viewer or recording). Closing it will stop them.\n\nClose anyway?'
-                        : 'Close this live stream and release its tuner?';
-                    if (!confirm(warn)) { return; }
-                    btn.disabled = true;
-                    req('POST', '/Close', { liveStreamId: s.liveStreamId }).then(render).catch(function (e) {
-                        alert(e.message);
-                        btn.disabled = false;
-                        refresh();
-                    });
-                };
-                tr.lastElementChild.appendChild(btn);
-                tb.appendChild(tr);
-            });
-
-            var tn = document.getElementById('rsTuners');
-            tn.innerHTML = '';
-            if (!d.tuners.length) {
-                tn.innerHTML = '<tr><td colspan="4" style="padding:.5em .4em; opacity:.6;">No HDHomeRun leases (or tuner URL not set / unreachable).</td></tr>';
-            }
-            d.tuners.forEach(function (t) {
-                var tr = document.createElement('tr');
-                tr.innerHTML =
-                    '<td style="padding:.3em .4em; opacity:.7;">' + t.resource + '</td>' +
-                    '<td style="padding:.3em .4em;">' + t.channel + '</td>' +
-                    '<td style="padding:.3em .4em;">' + (t.name || '\u2014') + '</td>' +
-                    '<td style="padding:.3em .4em; opacity:.7;">' + (t.networkRate / 1000000).toFixed(2) + ' MB/s</td>';
-                tn.appendChild(tr);
-            });
-
-            var sn = document.getElementById('rsSessions');
-            sn.innerHTML = '';
-            if (!d.sessions.length) {
-                sn.innerHTML = '<tr><td style="padding:.4em; opacity:.6;">Nobody is watching live TV.</td></tr>';
-            }
-            d.sessions.forEach(function (s) {
-                var tr = document.createElement('tr');
-                tr.innerHTML =
-                    '<td style="padding:.3em .4em;">' + s.user + '</td>' +
-                    '<td style="padding:.3em .4em; opacity:.7;">' + s.device + '</td>' +
-                    '<td style="padding:.3em .4em;">' + (s.channel || s.itemName) + '</td>' +
-                    '<td style="padding:.3em .4em; opacity:.7;">' + (s.client || '') + ' ' + (s.playMethod || '') + '</td>';
-                sn.appendChild(tr);
-            });
-
-            var rn = document.getElementById('rsRecordings');
-            rn.innerHTML = '';
-            if (!d.recordings.length) {
-                rn.innerHTML = '<tr><td style="padding:.4em; opacity:.6;">No in-progress recordings.</td></tr>';
-            }
-            d.recordings.forEach(function (r) {
-                var tr = document.createElement('tr');
-                tr.innerHTML =
-                    '<td style="padding:.3em .4em;">' + r.name + '</td>' +
-                    '<td style="padding:.3em .4em; opacity:.7;">' + (r.channel || '') + '</td>' +
-                    '<td style="padding:.3em .4em; opacity:.7;">' + r.status + '</td>';
-                rn.appendChild(tr);
-            });
-
-            document.getElementById('rsStamp').textContent =
-                'Updated ' + new Date().toLocaleTimeString() + ' \u2014 refreshes every 5s while this page is open.';
-        }
-
-        function refresh() {
-            req('GET', '/Status').then(render).catch(function (e) {
-                var err = document.getElementById('rsError');
-                err.style.display = 'block';
-                err.textContent = e.message;
-            });
-        }
-
-        refresh();
-        setInterval(refresh, 5000);
-    })();
-</script>
-</body>
-</html>
