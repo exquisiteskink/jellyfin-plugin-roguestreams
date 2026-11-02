@@ -33,7 +33,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             new PluginPageInfo
             {
-                Name = "roguestreams",
+                Name = Name,
+                DisplayName = Name,
+                EnableInMainMenu = true,
+                MenuSection = "server",
+                MenuIcon = "live_tv",
                 EmbeddedResourcePath = GetType().Namespace + ".Web.roguestreams.html"
             }
         };
