@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rogue Streams</title>
+</head>
+<body>
+<div id="rsRoot" style="padding:1em 1.5em; max-width:1100px;">
+    <h1 style="margin:0 0 .25em;">Rogue Streams</h1>
+    <p style="margin:0 0 1em; opacity:.75;">
+        Live TV transcodes running on this server, including orphans that Dashboard &rarr; Active Sessions cannot show.
+        Killing one releases its tuner. Nothing protected by a live session or recording can be killed.
+    </p>
+
+    <div id="rsRefusal" style="display:none; background:#5a1f1f; color:#ffd7d7; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
+
+    <div style="display:flex; gap:2em; flex-wrap:wrap;">
+        <div style="flex:1 1 520px;">
+            <h2 style="font-size:1.05em; margin:.5em 0;">Transcodes</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
+                <thead>
+                <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
+                    <th style="padding:.3em .4em;">Channel</th>
+                    <th style="padding:.3em .4em;">PID</th>
+                    <th style="padding:.3em .4em;">Running</th>
+                    <th style="padding:.3em .4em;">Who</th>
+                    <th style="padding:.3em .4em;"></th>
+                </tr>
+                </thead>
+                <tbody id="rsTranscodes"></tbody>
+            </table>
+        </div>
+        <div style="flex:1 1 380px;">
+            <h2 style="font-size:1.05em; margin:.5em 0;">Tuner leases</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
+                <thead>
+                <tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.2);">
+                    <th style="padding:.3em .4em;">Tuner</th>
+                    <th style="padding:.3em .4em;">Channel</th>
+                    <th style="padding:.3em .4em;">Name</th>
+                    <th style="padding:.3em .4em;">Rate</th>
+                </tr>
+                </thead>
+                <tbody id="rsTuners"></tbody>
+            </table>
+            <h2 style="font-size:1.05em; margin:1.2em 0 .3em;">Watching now</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:.92em;">
+                <tbody id="rsSessions"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <p id="rsStamp" style="opacity:.55; font-size:.85em; margin-top:1.5em;"></p>
+</div>
+
+<script type="text/javascript">
+    (function () {
+        var base = (window.ApiClient && ApiClient.getUrl) ? ApiClient.getUrl('RogueStreams') : '/RogueStreams';
+
+        function token() {
+            return (window.ApiClient && ApiClient.accessToken) ? ApiClient.accessToken() : '';
+        }
+
+        function req(method, path) {
+            return fetch(base + path, {
+                method: method,
+                headers: { 'X-Emby-Token': token(), 'Content-Type': 'application/json' }
+            }).then(function (r) {
+                return r.json().then(function (body) {
+                    if (!r.ok) { throw new Error(body && body.message ? body.message : ('HTTP ' + r.status)); }
+                    return body;
+                });
+            });
+        }
+
+        function secs(s) {
+            if (s < 90) { return Math.round(s) + 's'; }
+            return Math.round(s / 60) + 'm';
+        }
+
+        function render(d) {
+            var refusal = document.getElementById('rsRefusal');
+            if (d.refusal) {
+                refusal.style.display = 'block';
+                refusal.textContent = 'Refusing to kill: ' + d.refusal;
+            } else {
+                refusal.style.display = 'none';
+            }
+
+            var tb = document.getElementById('rsTranscodes');
+            tb.innerHTML = '';
+            if (!d.transcodes.length) {
+                tb.innerHTML = '<tr><td colspan="5" style="padding:.5em .4em; opacity:.6;">No Live TV transcodes running.</td></tr>';
+            }
+            d.transcodes.forEach(function (t) {
+                var tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid rgba(255,255,255,.07)';
+
+                var who = t.protected
+                    ? '<span style="color:#7bd88f;">watching</span>'
+                    : '<span style="color:#ff9b8a;">nobody</span>';
+
+                tr.innerHTML =
+                    '<td style="padding:.4em;">' + t.channel + '</td>' +
+                    '<td style="padding:.4em; opacity:.7;">' + t.pid + '</td>' +
+                    '<td style="padding:.4em; opacity:.7;">' + secs(t.runningSeconds) + '</td>' +
+                    '<td style="padding:.4em;">' + who + '</td>' +
+                    '<td style="padding:.4em; text-align:right;"></td>';
+
+                var cell = tr.lastElementChild;
+                if (!t.protected) {
+                    var btn = document.createElement('button');
+                    btn.className = 'raised button-cancel';
+                    btn.textContent = 'Kill';
+                    btn.onclick = function () {
+                        if (!confirm('Kill pid ' + t.pid + ' on channel ' + t.channel + '?')) { return; }
+                        btn.disabled = true;
+                        req('POST', '/Kill/' + t.pid).then(render).catch(function (e) {
+                            alert(e.message);
+                            btn.disabled = false;
+                            refresh();
+                        });
+                    };
+                    cell.appendChild(btn);
+                }
+                tb.appendChild(tr);
+            });
+
+            var tn = document.getElementById('rsTuners');
+            tn.innerHTML = '';
+            if (!d.tuners.length) {
+                tn.innerHTML = '<tr><td colspan="4" style="padding:.5em .4em; opacity:.6;">All tuners free.</td></tr>';
+            }
+            d.tuners.forEach(function (t) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td style="padding:.3em .4em; opacity:.7;">' + t.resource + '</td>' +
+                    '<td style="padding:.3em .4em;">' + t.channel + '</td>' +
+                    '<td style="padding:.3em .4em;">' + (t.name || '&mdash;') + '</td>' +
+                    '<td style="padding:.3em .4em; opacity:.7;">' + (t.networkRate / 1000000).toFixed(2) + ' MB/s</td>';
+                tn.appendChild(tr);
+            });
+
+            var sn = document.getElementById('rsSessions');
+            sn.innerHTML = '';
+            if (!d.sessions.length) {
+                sn.innerHTML = '<tr><td style="padding:.4em; opacity:.6;">Nobody is watching live TV.</td></tr>';
+            }
+            d.sessions.forEach(function (s) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td style="padding:.3em .4em;">' + s.user + '</td>' +
+                    '<td style="padding:.3em .4em; opacity:.7;">' + s.device + '</td>' +
+                    '<td style="padding:.3em .4em;">ch ' + s.channel + '</td>' +
+                    '<td style="padding:.3em .4em; opacity:.7;">' + s.playMethod + '</td>';
+                sn.appendChild(tr);
+            });
+
+            document.getElementById('rsStamp').textContent =
+                'Updated ' + new Date().toLocaleTimeString() + ' — refreshes every 5s while this page is open.';
+        }
+
+        function refresh() {
+            req('GET', '/Status').then(render).catch(function (e) {
+                var refusal = document.getElementById('rsRefusal');
+                refusal.style.display = 'block';
+                refusal.textContent = e.message;
+            });
+        }
+
+        refresh();
+        setInterval(refresh, 5000);
+    })();
+</script>
+</body>
+</html>

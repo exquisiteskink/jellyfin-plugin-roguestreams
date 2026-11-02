@@ -1,0 +1,84 @@
+name: Build and publish plugin
+
+# Publishes a Jellyfin plugin repository to GitHub Pages.
+# After the first tagged release the install URL is:
+#   https://<owner>.github.io/<repo>/manifest.json
+# Dashboard -> Plugins -> Repositories -> add that URL.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 1.0.0.0"
+        required: true
+        default: "1.0.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install jprm
+        run: pip install jprm
+
+      # jprm runs `dotnet build` against the solution in the repo root.
+      # It writes to ./artifacts, which must already exist.
+      - name: Package plugin
+        run: |
+          mkdir -p artifacts
+          jprm plugin build . --version "${{ steps.ver.outputs.version }}"
+
+      - name: Build plugin repository manifest
+        run: |
+          mkdir -p repo
+          jprm repo init ./repo/manifest.json
+          jprm repo add ./repo ./artifacts/*.zip \
+            --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ steps.ver.outputs.version }}
+          path: artifacts/*.zip
+
+      - name: Attach zip to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+
+      - name: Publish repository to GitHub Pages
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./repo
+          publish_branch: gh-pages
