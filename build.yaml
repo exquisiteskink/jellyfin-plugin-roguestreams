@@ -11,7 +11,7 @@ description: >
   tuner is released. Unlike Dashboard -> Active Sessions, this sees the ghost streams
   that have no session object at all.
 category: "Live TV"
-owner: "anthony"
+owner: "exquisiteskink"
 artifacts:
   - "Jellyfin.Plugin.RogueStreams.dll"
 changelog: ""
