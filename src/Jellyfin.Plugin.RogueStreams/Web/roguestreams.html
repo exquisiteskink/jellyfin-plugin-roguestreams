@@ -60,23 +60,20 @@
 
 <script type="text/javascript">
     (function () {
-        var base = (window.ApiClient && ApiClient.getUrl) ? ApiClient.getUrl('RogueStreams') : '/RogueStreams';
-
-        function token() {
-            return (window.ApiClient && ApiClient.accessToken) ? ApiClient.accessToken() : '';
-        }
-
         function req(method, path, body) {
-            var opts = {
-                method: method,
-                headers: { 'X-Emby-Token': token(), 'Content-Type': 'application/json' }
-            };
-            if (body) { opts.body = JSON.stringify(body); }
-            return fetch(base + path, opts).then(function (r) {
-                return r.json().then(function (data) {
-                    if (!r.ok) { throw new Error(data && data.message ? data.message : ('HTTP ' + r.status)); }
-                    return data;
-                });
+            if (!window.ApiClient) {
+                return Promise.reject(new Error('ApiClient is not available on this page.'));
+            }
+            var url = ApiClient.getUrl('RogueStreams' + path);
+            if (method === 'GET') {
+                return ApiClient.getJSON(url);
+            }
+            return ApiClient.ajax({
+                type: method,
+                url: url,
+                data: JSON.stringify(body || {}),
+                contentType: 'application/json',
+                dataType: 'json'
             });
         }
 

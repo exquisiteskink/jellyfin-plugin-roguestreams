@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -8,6 +7,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
@@ -83,7 +83,7 @@ public sealed class CloseRequest
 /// Lists Jellyfin's open Live TV streams and closes them through IMediaSourceManager.
 /// </summary>
 [ApiController]
-[Authorize]
+[Authorize(Policy = Policies.RequiresElevation)]
 [Route("RogueStreams")]
 public class RogueStreamsController : ControllerBase
 {
@@ -112,11 +112,6 @@ public class RogueStreamsController : ControllerBase
     [HttpGet("Status")]
     public async Task<ActionResult<StatusResult>> GetStatus(CancellationToken ct)
     {
-        if (!IsAdmin())
-        {
-            return Forbid();
-        }
-
         return await BuildStatusAsync(ct).ConfigureAwait(false);
     }
 
@@ -127,11 +122,6 @@ public class RogueStreamsController : ControllerBase
     [HttpPost("Close")]
     public async Task<ActionResult<StatusResult>> Close([FromBody] CloseRequest request, CancellationToken ct)
     {
-        if (!IsAdmin())
-        {
-            return Forbid();
-        }
-
         var id = request.LiveStreamId?.Trim();
         if (string.IsNullOrEmpty(id))
         {
@@ -172,12 +162,6 @@ public class RogueStreamsController : ControllerBase
         return await BuildStatusAsync(ct).ConfigureAwait(false);
     }
 
-    private bool IsAdmin()
-    {
-        return User?.Identity?.IsAuthenticated == true
-               && (User!.IsInRole("Administrator") || User.HasClaim("IsAdministrator", "true"));
-    }
-
     private async Task<StatusResult> BuildStatusAsync(CancellationToken ct)
     {
         var result = new StatusResult();
@@ -210,34 +194,39 @@ public class RogueStreamsController : ControllerBase
             });
         }
 
-        var open = EnumerateOpenLiveStreams();
-        if (open is null)
+        var ids = EnumerateOpenLiveStreamIds();
+        foreach (var session in result.Sessions)
         {
-            result.Note = "Could not enumerate Jellyfin's open live-stream map; listing sessions and tuners only. Close still works if you paste a liveStreamId from a session.";
-            open = Array.Empty<KeyValuePair<string, ILiveStream>>();
+            if (!string.IsNullOrEmpty(session.LiveStreamId))
+            {
+                ids.Add(session.LiveStreamId!);
+            }
         }
 
-        foreach (var entry in open)
+        foreach (var id in ids.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var stream = entry.Value;
-            var source = stream.MediaSource;
+            var stream = _mediaSourceManager.GetLiveStreamInfo(id);
+            var source = stream?.MediaSource;
             var path = source?.Path;
+            var sessionName = result.Sessions
+                .FirstOrDefault(s => string.Equals(s.LiveStreamId, id, StringComparison.OrdinalIgnoreCase));
             result.Streams.Add(new LiveStreamRow
             {
-                LiveStreamId = entry.Key,
-                Name = StreamName(source, stream),
-                TunerHostId = stream.TunerHostId ?? string.Empty,
-                ConsumerCount = stream.ConsumerCount,
+                LiveStreamId = id,
+                Name = stream is not null
+                    ? StreamName(source, stream)
+                    : (sessionName?.Channel ?? sessionName?.ItemName ?? id),
+                TunerHostId = stream?.TunerHostId ?? string.Empty,
+                ConsumerCount = stream?.ConsumerCount ?? 0,
                 Path = string.IsNullOrEmpty(path) ? null : Path.GetFileName(path),
                 FileBytes = TryFileLength(path),
                 Viewers = result.Sessions
-                    .Where(s => string.Equals(s.LiveStreamId, entry.Key, StringComparison.OrdinalIgnoreCase))
+                    .Where(s => string.Equals(s.LiveStreamId, id, StringComparison.OrdinalIgnoreCase))
                     .Select(s => new ViewerInfo { User = s.User, Device = s.Device })
                     .ToList(),
-                Recordings = recordings
-                    .Where(r => RecordingMatches(r, source, stream))
-                    .Select(r => r.Name)
-                    .ToList()
+                Recordings = stream is null
+                    ? new List<string>()
+                    : recordings.Where(r => RecordingMatches(r, source, stream)).Select(r => r.Name).ToList()
             });
         }
 
@@ -245,6 +234,12 @@ public class RogueStreamsController : ControllerBase
             .OrderByDescending(s => s.InUse)
             .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        if (result.Streams.Count == 0)
+        {
+            var total = _sessionManager.Sessions.Count();
+            result.Note = $"No open live streams. Jellyfin has {total} session(s); {result.Sessions.Count} look like Live TV. Playing on the web should appear here once PlaybackInfo has opened the live stream.";
+        }
 
         await FillTunersAsync(result, ct).ConfigureAwait(false);
         return result;
@@ -266,6 +261,7 @@ public class RogueStreamsController : ControllerBase
         var type = item.Type.ToString();
         return type.Contains("TvChannel", StringComparison.OrdinalIgnoreCase)
                || type.Contains("LiveTv", StringComparison.OrdinalIgnoreCase)
+               || type.Contains("Program", StringComparison.OrdinalIgnoreCase)
                || item.ChannelId != Guid.Empty;
     }
 
@@ -348,28 +344,11 @@ public class RogueStreamsController : ControllerBase
         }
     }
 
-    private IReadOnlyList<KeyValuePair<string, ILiveStream>>? EnumerateOpenLiveStreams()
+    private List<string> EnumerateOpenLiveStreamIds()
     {
+        var ids = new List<string>();
         var manager = _mediaSourceManager;
         var type = manager.GetType();
-
-        foreach (var field in type.GetFields(StreamMapFlags))
-        {
-            object? value;
-            try
-            {
-                value = field.GetValue(manager);
-            }
-            catch
-            {
-                continue;
-            }
-
-            if (value is ConcurrentDictionary<string, ILiveStream> typed)
-            {
-                return typed.ToArray();
-            }
-        }
 
         foreach (var field in type.GetFields(StreamMapFlags))
         {
@@ -388,23 +367,35 @@ public class RogueStreamsController : ControllerBase
                 continue;
             }
 
-            var list = new List<KeyValuePair<string, ILiveStream>>();
+            var looksLikeStreamMap = field.Name.Contains("open", StringComparison.OrdinalIgnoreCase)
+                || field.Name.Contains("LiveStream", StringComparison.OrdinalIgnoreCase)
+                || field.Name.Contains("liveStream", StringComparison.OrdinalIgnoreCase);
+
+            var fromField = new List<string>();
             foreach (System.Collections.DictionaryEntry entry in dict)
             {
-                if (entry.Key is string key && entry.Value is ILiveStream stream)
+                if (entry.Key is string key && !string.IsNullOrEmpty(key))
                 {
-                    list.Add(new KeyValuePair<string, ILiveStream>(key, stream));
+                    fromField.Add(key);
                 }
             }
 
-            if (list.Count > 0 || field.Name.Contains("open", StringComparison.OrdinalIgnoreCase))
+            if (fromField.Count > 0 || looksLikeStreamMap)
             {
-                return list;
+                ids.AddRange(fromField);
+                if (looksLikeStreamMap)
+                {
+                    break;
+                }
             }
         }
 
-        _logger.LogWarning("Rogue Streams: no open-stream map found on {Type}", type.FullName);
-        return null;
+        if (ids.Count == 0)
+        {
+            _logger.LogWarning("Rogue Streams: no open-stream map keys on {Type}", type.FullName);
+        }
+
+        return ids;
     }
 
     private async Task FillTunersAsync(StatusResult result, CancellationToken ct)

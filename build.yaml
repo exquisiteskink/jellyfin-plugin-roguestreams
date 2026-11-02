@@ -1,7 +1,7 @@
 ---
 name: "Rogue Streams"
 guid: "7f1c2a54-9b3d-4c6e-8a10-2c9e5d4b7f31"
-version: "1.1.1.0"
+version: "1.1.2.0"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "List and close open Live TV streams from the dashboard."
