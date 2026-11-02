@@ -48,14 +48,16 @@ Orphans are marked **nobody** and get a **Kill** button.
 
 ### From the plugin repository (after CI publishes it)
 
-Dashboard → Plugins → Repositories → add:
+Dashboard → Plugins → Repositories → **+** → paste:
 
 ```
-https://<owner>.github.io/<repo>/manifest.json
+https://exquisiteskink.github.io/jellyfin-plugin-roguestreams/manifest.json
 ```
 
-then install **Rogue Streams** from the catalog. The workflow publishes that manifest to the
-`gh-pages` branch on the first `v*` tag.
+Save, then Catalog → **Live TV** → **Rogue Streams** → Install → restart Jellyfin.
+Dashboard → Plugins → Rogue Streams is the page.
+
+The manifest lives on the `gh-pages` branch and is rebuilt by CI on every `v*` tag.
 
 ### Manually
 
