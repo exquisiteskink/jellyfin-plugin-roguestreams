@@ -1,1 +1,20 @@
-[]
+[
+    {
+        "guid": "7f1c2a54-9b3d-4c6e-8a10-2c9e5d4b7f31",
+        "name": "Rogue Streams",
+        "description": "Shows every open Live TV stream inside this Jellyfin process, including ones Dashboard -> Active Sessions cannot see, and closes an individual stream through CloseLiveStream so its tuner is released. Closing is always manual.\n",
+        "overview": "List and close open Live TV streams from the dashboard.",
+        "owner": "exquisiteskink",
+        "category": "Live TV",
+        "versions": [
+            {
+                "version": "1.2.0.0",
+                "changelog": "### 1.2.0.0\n- Add HDHomeRun settings with auto-detect and test before saving\n- Remove the built-in device-specific tuner URL; each install confirms its own\n### 1.1.4.0\n- Load the dashboard page as a Jellyfin plugin view with a separate controller script\n- Inline scripts were ignored, so the stream table never filled\n### 1.1.3.0\n- Publish a per-version changelog so the Jellyfin catalog can offer updates\n- Keep previous versions in the plugin repository manifest",
+                "targetAbi": "12.4.0.0",
+                "sourceUrl": "https://exquisiteskink.github.io/jellyfin-plugin-roguestreams/rogue-streams/rogue-streams_1.2.0.0.zip",
+                "checksum": "ed5aa0383a9e3ac7d7aad565672a2f00",
+                "timestamp": "2026-11-06T19:14:59Z"
+            }
+        ]
+    }
+]
