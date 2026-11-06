@@ -1,4 +1,6 @@
 export default function (view) {
+    var pluginId = '7f1c2a54-9b3d-4c6e-8a10-2c9e5d4b7f31';
+
     function list(data, name) {
         if (!data) {
             return [];
@@ -58,6 +60,178 @@ export default function (view) {
 
     function q(id) {
         return view.querySelector('#' + id);
+    }
+
+    function camel(name) {
+        return name.charAt(0).toLowerCase() + name.slice(1);
+    }
+
+    function configGet(config, name) {
+        if (!config) {
+            return '';
+        }
+        var value = config[name];
+        if (value == null) {
+            value = config[camel(name)];
+        }
+        return value == null ? '' : value;
+    }
+
+    function configSet(config, name, value) {
+        var key = Object.prototype.hasOwnProperty.call(config, camel(name)) ? camel(name) : name;
+        config[key] = value;
+    }
+
+    function setSettingsMessage(text, isError) {
+        var el = q('rsSettingsMsg');
+        if (!el) {
+            return;
+        }
+        el.textContent = text || '';
+        el.style.color = isError ? '#ff9b8a' : '#7bd88f';
+    }
+
+    function loadSettings() {
+        var client = window.ApiClient;
+        if (!client) {
+            return;
+        }
+        client.getPluginConfiguration(pluginId).then(function (config) {
+            var input = q('rsTunerUrl');
+            if (input) {
+                input.value = configGet(config, 'TunerUrl');
+            }
+            setSettingsMessage('', false);
+        }).catch(function (e) {
+            setSettingsMessage('Could not load settings: ' + (e.message || e), true);
+        });
+    }
+
+    function saveSettings() {
+        var client = window.ApiClient;
+        if (!client) {
+            setSettingsMessage('ApiClient is not available on this page.', true);
+            return;
+        }
+
+        var value = q('rsTunerUrl').value.trim();
+        setSettingsMessage('Saving...', false);
+        client.getPluginConfiguration(pluginId).then(function (config) {
+            configSet(config, 'TunerUrl', value);
+            return client.updatePluginConfiguration(pluginId, config);
+        }).then(function (result) {
+            if (window.Dashboard && window.Dashboard.processPluginConfigurationUpdateResult) {
+                window.Dashboard.processPluginConfigurationUpdateResult(result);
+            }
+            setSettingsMessage(value ? 'Saved. Tuner leases will use this URL.' : 'Saved. Tuner lease lookup is disabled.', false);
+            refresh();
+        }).catch(function (e) {
+            setSettingsMessage('Could not save: ' + (e.message || e), true);
+        });
+    }
+
+    function testTuner() {
+        var value = q('rsTunerUrl').value.trim();
+        if (!value) {
+            setSettingsMessage('Enter or auto-detect an HDHomeRun URL first.', true);
+            return;
+        }
+
+        setSettingsMessage('Testing ' + value + '...', false);
+        req('POST', '/TestTuner', { url: value }).then(function (result) {
+            var reachable = result.reachable != null ? result.reachable : result.Reachable;
+            var message = result.message || result.Message || '';
+            if (!reachable) {
+                setSettingsMessage(message || 'Tuner did not respond.', true);
+                return;
+            }
+
+            var bits = [];
+            var friendly = result.friendlyName || result.FriendlyName;
+            var model = result.modelNumber || result.ModelNumber;
+            var count = result.tunerCount != null ? result.tunerCount : result.TunerCount;
+            if (friendly) {
+                bits.push(friendly);
+            }
+            if (model) {
+                bits.push(model);
+            }
+            if (count) {
+                bits.push(count + ' tuner(s)');
+            }
+            bits.push(message || 'Tuner responded.');
+            setSettingsMessage(bits.join(' \u00b7 '), false);
+        }).catch(function (e) {
+            setSettingsMessage('Test failed: ' + (e.message || e), true);
+        });
+    }
+
+    function useDetected(tuner) {
+        var url = tuner.url || tuner.Url || '';
+        q('rsTunerUrl').value = url;
+        setSettingsMessage('Selected ' + url + '. Click Save tuner setting to keep it.', false);
+    }
+
+    function renderDetected(tuners) {
+        var box = q('rsDetectResults');
+        box.innerHTML = '';
+        tuners.forEach(function (tuner) {
+            var url = tuner.url || tuner.Url || '';
+            var name = tuner.friendlyName || tuner.FriendlyName || 'HDHomeRun';
+            var device = tuner.deviceId || tuner.DeviceId || '';
+            var count = tuner.tunerCount != null ? tuner.tunerCount : tuner.TunerCount;
+
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex; gap:.75em; align-items:center; justify-content:space-between; padding:.5em 0; border-top:1px solid rgba(255,255,255,.1);';
+
+            var details = document.createElement('div');
+            var title = document.createElement('strong');
+            title.textContent = name;
+            details.appendChild(title);
+
+            var meta = document.createElement('div');
+            meta.style.cssText = 'opacity:.7; font-size:.9em; word-break:break-all;';
+            var bits = [url];
+            if (device) {
+                bits.push('device ' + device);
+            }
+            if (count) {
+                bits.push(count + ' tuner(s)');
+            }
+            meta.textContent = bits.join(' \u00b7 ');
+            details.appendChild(meta);
+
+            var use = document.createElement('button');
+            use.setAttribute('is', 'emby-button');
+            use.type = 'button';
+            use.className = 'raised';
+            use.textContent = 'Use';
+            use.addEventListener('click', function () {
+                useDetected(tuner);
+            });
+
+            row.appendChild(details);
+            row.appendChild(use);
+            box.appendChild(row);
+        });
+    }
+
+    function detectTuners() {
+        var box = q('rsDetectResults');
+        box.innerHTML = '';
+        setSettingsMessage('Scanning the local network for HDHomeRun devices...', false);
+        req('GET', '/DiscoverTuners').then(function (results) {
+            var tuners = Array.isArray(results) ? results : ((results && results.items) || []);
+            if (!tuners.length) {
+                setSettingsMessage('No HDHomeRun found. Check that the tuner is on the same network as Jellyfin, or enter its URL manually.', true);
+                return;
+            }
+
+            setSettingsMessage('Found ' + tuners.length + ' tuner(s). Click Use, then Save tuner setting.', false);
+            renderDetected(tuners);
+        }).catch(function (e) {
+            setSettingsMessage('Auto-detect failed: ' + (e.message || e), true);
+        });
     }
 
     function render(d) {
@@ -182,7 +356,14 @@ export default function (view) {
 
     var timer;
     view.addEventListener('viewshow', function () {
+        q('rsDetectBtn').onclick = detectTuners;
+        q('rsTestBtn').onclick = testTuner;
+        q('rsSaveBtn').onclick = saveSettings;
+        loadSettings();
         refresh();
+        if (timer) {
+            clearInterval(timer);
+        }
         timer = setInterval(refresh, 5000);
     });
     view.addEventListener('viewhide', function () {

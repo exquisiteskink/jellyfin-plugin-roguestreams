@@ -1,4 +1,4 @@
-<div id="RogueStreamsPage" data-role="page" class="page type-interior pluginConfigurationPage fullWidthContent" data-controller="__plugin/Rogue Streams.js">
+<div id="RogueStreamsPage" data-role="page" class="page type-interior pluginConfigurationPage fullWidthContent" data-controller="__plugin/Rogue Streams.js" data-require="emby-input,emby-button">
     <div class="content-primary">
         <div class="sectionTitleContainer">
             <h1 class="sectionTitle">Rogue Streams</h1>
@@ -8,6 +8,26 @@
             CloseLiveStream &mdash; it does not kill ffmpeg. Closing a stream that is actually
             being watched or recorded will stop that viewer or recording.
         </p>
+
+        <div style="background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); border-radius:4px; padding:.75em 1em; margin-bottom:1em;">
+            <h2 class="sectionTitle" style="font-size:1.05em; margin-top:0;">HDHomeRun tuner settings</h2>
+            <p class="fieldDescription" style="margin-top:0;">
+                Optional. Used only to show live tuner leases; closing streams does not need it.
+                Auto-detect finds HDHomeRun devices on the server's network. Confirm by saving the URL you want.
+            </p>
+            <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="rsTunerUrl">HDHomeRun base URL</label>
+                <input id="rsTunerUrl" name="rsTunerUrl" type="text" is="emby-input" placeholder="http://tuner-host-or-ip" />
+                <div class="fieldDescription">Leave blank to disable tuner lease lookup. A trailing slash is not required.</div>
+            </div>
+            <div style="display:flex; gap:.75em; flex-wrap:wrap; align-items:center;">
+                <button id="rsDetectBtn" is="emby-button" type="button" class="raised">Auto-detect</button>
+                <button id="rsTestBtn" is="emby-button" type="button" class="raised">Test URL</button>
+                <button id="rsSaveBtn" is="emby-button" type="button" class="raised button-submit">Save tuner setting</button>
+                <span id="rsSettingsMsg" class="fieldDescription" style="margin:0; opacity:.8;"></span>
+            </div>
+            <div id="rsDetectResults" style="margin-top:.75em;"></div>
+        </div>
 
         <div id="rsNote" class="fieldDescription" style="display:none; background:#3a3418; color:#ffe9a8; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>
         <div id="rsError" class="fieldDescription" style="display:none; background:#5a1f1f; color:#ffd7d7; padding:.75em 1em; border-radius:4px; margin-bottom:1em;"></div>

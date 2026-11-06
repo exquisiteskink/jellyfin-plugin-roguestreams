@@ -21,6 +21,7 @@ which is the same path as `POST /LiveStreams/Close`.
 | --- | --- |
 | Open live streams | every stream in Jellyfin's open-stream map: name, liveStreamId, consumer count, viewers, recordings, cache file size |
 | Tuner leases | live HDHomeRun `/status.json` (optional): channel, name, target IP, bitrate |
+| Tuner settings | auto-detect HDHomeRun devices, confirm/test a URL, or disable tuner leases |
 | Watching now | live TV sessions with user, device, client, channel |
 | Recordings | in-progress DVR timers |
 
@@ -79,18 +80,26 @@ To produce an installable package and manifest locally:
 
 ```bash
 pip install jprm
-jprm plugin build . --version 1.1.4.0 --output-dir ./artifact
+jprm plugin build . --version 1.2.0.0 --output-dir ./artifact
 jprm repo add ./artifact/*.zip --output-dir ./repo
 ```
 
 ## Configuration
 
+Open Dashboard → Plugins → Rogue Streams. The **HDHomeRun tuner settings**
+section can auto-detect tuners with Jellyfin's own discovery, test the URL, and
+save the one you confirm. Nothing is written to the plugin configuration until
+you press **Save tuner setting**.
+
 `plugins/configurations/Jellyfin.Plugin.RogueStreams.xml` (created on first save):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `TunerUrl` | `` | HDHomeRun base URL used for `/status.json`. Closing does not need this. |
+| `TunerUrl` | empty | HDHomeRun base URL used for `/status.json`. Empty disables tuner lease lookup. Closing does not need this. |
 | `GraceSeconds` | `20` | unused; closing is always manual |
+
+There is no built-in device IP. Each installation detects or enters its own
+tuner URL; the value is stored only in that server's configuration XML.
 
 ## Compatibility
 

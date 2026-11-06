@@ -3,6 +3,11 @@
 All notable changes to this project are documented here. Jellyfin shows the
 `changelog` from `build.yaml` on each catalog version.
 
+## 1.2.0.0
+
+- Add HDHomeRun tuner settings with auto-detect, URL test, and explicit save
+- Remove the built-in device-specific tuner URL; each installation confirms its own
+
 ## 1.1.4.0
 
 - Load the dashboard page as a Jellyfin plugin view (`pluginConfigurationPage` + `Rogue Streams.js`)

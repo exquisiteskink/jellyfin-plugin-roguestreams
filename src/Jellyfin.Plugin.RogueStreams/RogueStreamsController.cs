@@ -79,6 +79,30 @@ public sealed class CloseRequest
     public string LiveStreamId { get; set; } = string.Empty;
 }
 
+public sealed class DiscoveredTuner
+{
+    public string Url { get; set; } = string.Empty;
+    public string FriendlyName { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
+    public int TunerCount { get; set; }
+}
+
+public sealed class TunerUrlRequest
+{
+    public string Url { get; set; } = string.Empty;
+}
+
+public sealed class TunerProbeResult
+{
+    public string Url { get; set; } = string.Empty;
+    public bool Reachable { get; set; }
+    public string FriendlyName { get; set; } = string.Empty;
+    public string ModelNumber { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
+    public int TunerCount { get; set; }
+    public string Message { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// Lists Jellyfin's open Live TV streams and closes them through IMediaSourceManager.
 /// </summary>
@@ -95,17 +119,20 @@ public class RogueStreamsController : ControllerBase
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISessionManager _sessionManager;
     private readonly ILiveTvManager _liveTvManager;
+    private readonly ITunerHostManager _tunerHostManager;
     private readonly ILogger<RogueStreamsController> _logger;
 
     public RogueStreamsController(
         IMediaSourceManager mediaSourceManager,
         ISessionManager sessionManager,
         ILiveTvManager liveTvManager,
+        ITunerHostManager tunerHostManager,
         ILogger<RogueStreamsController> logger)
     {
         _mediaSourceManager = mediaSourceManager;
         _sessionManager = sessionManager;
         _liveTvManager = liveTvManager;
+        _tunerHostManager = tunerHostManager;
         _logger = logger;
     }
 
@@ -113,6 +140,98 @@ public class RogueStreamsController : ControllerBase
     public async Task<ActionResult<StatusResult>> GetStatus(CancellationToken ct)
     {
         return await BuildStatusAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Uses Jellyfin's own tuner discovery to find HDHomeRun devices on the LAN.
+    /// Nothing is saved here; the administrator confirms the URL in the page.
+    /// </summary>
+    [HttpGet("DiscoverTuners")]
+    public async Task<ActionResult<List<DiscoveredTuner>>> DiscoverTuners()
+    {
+        var found = new List<DiscoveredTuner>();
+        try
+        {
+            await foreach (var tuner in _tunerHostManager.DiscoverTuners(false))
+            {
+                if (!string.Equals(tuner.Type, "hdhomerun", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var url = NormalizeTunerUrl(tuner.Url);
+                if (url is null || found.Any(t => string.Equals(t.Url, url, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                found.Add(new DiscoveredTuner
+                {
+                    Url = url,
+                    FriendlyName = tuner.FriendlyName ?? string.Empty,
+                    DeviceId = tuner.DeviceId ?? string.Empty,
+                    TunerCount = tuner.TunerCount
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Rogue Streams: HDHomeRun discovery failed");
+        }
+
+        found.Sort((a, b) => string.Compare(a.FriendlyName, b.FriendlyName, StringComparison.OrdinalIgnoreCase));
+        return Ok(found);
+    }
+
+    /// <summary>
+    /// Checks a manually entered or auto-detected URL without saving it.
+    /// </summary>
+    [HttpPost("TestTuner")]
+    public async Task<ActionResult<TunerProbeResult>> TestTuner([FromBody] TunerUrlRequest request, CancellationToken ct)
+    {
+        var url = NormalizeTunerUrl(request?.Url);
+        if (url is null)
+        {
+            return BadRequest(new { message = "Enter an http:// or https:// HDHomeRun address." });
+        }
+
+        var result = new TunerProbeResult { Url = url };
+        try
+        {
+            using (var discover = await Http.GetAsync($"{url}/discover.json", ct).ConfigureAwait(false))
+            {
+                if (discover.IsSuccessStatusCode)
+                {
+                    var json = await discover.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    result.Reachable = true;
+                    result.FriendlyName = Str(root, "FriendlyName");
+                    result.ModelNumber = Str(root, "ModelNumber");
+                    result.DeviceId = Str(root, "DeviceID");
+                    result.TunerCount = (int)Num(root, "TunerCount");
+                    result.Message = "HDHomeRun responded to /discover.json.";
+                    return Ok(result);
+                }
+
+                using var status = await Http.GetAsync($"{url}/status.json", ct).ConfigureAwait(false);
+                if (status.IsSuccessStatusCode)
+                {
+                    result.Reachable = true;
+                    result.Message = "Tuner responded to /status.json, but not /discover.json. It may be an older model.";
+                    return Ok(result);
+                }
+
+                result.Message = $"Tuner returned HTTP {(int)discover.StatusCode} for /discover.json and HTTP {(int)status.StatusCode} for /status.json.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Rogue Streams: tuner probe failed for {Url}", url);
+            result.Message = $"Could not reach {url}: {ex.Message}";
+        }
+
+        return Ok(result);
     }
 
     /// <summary>
@@ -405,15 +524,16 @@ public class RogueStreamsController : ControllerBase
 
     private async Task FillTunersAsync(StatusResult result, CancellationToken ct)
     {
-        var tunerUrl = Plugin.Instance?.Configuration.TunerUrl;
-        if (string.IsNullOrWhiteSpace(tunerUrl))
+        var tunerUrl = NormalizeTunerUrl(Plugin.Instance?.Configuration.TunerUrl);
+        if (tunerUrl is null)
         {
+            AppendNote(result, "No HDHomeRun URL configured. Use the settings above to auto-detect or enter one.");
             return;
         }
 
         try
         {
-            using var resp = await Http.GetAsync($"{tunerUrl.TrimEnd('/')}/status.json", ct).ConfigureAwait(false);
+            using var resp = await Http.GetAsync($"{tunerUrl}/status.json", ct).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             foreach (var el in JsonDocument.Parse(json).RootElement.EnumerateArray())
@@ -438,6 +558,42 @@ public class RogueStreamsController : ControllerBase
         {
             _logger.LogDebug(ex, "Rogue Streams: tuner status unavailable at {Url}", tunerUrl);
         }
+    }
+
+    private static void AppendNote(StatusResult result, string note)
+    {
+        result.Note = string.IsNullOrWhiteSpace(result.Note)
+            ? note
+            : result.Note + " " + note;
+    }
+
+    private static string? NormalizeTunerUrl(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var value = raw.Trim();
+        if (!value.Contains("://", StringComparison.Ordinal))
+        {
+            value = "http://" + value;
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || string.IsNullOrEmpty(uri.Host)
+            || (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        var builder = new UriBuilder(uri)
+        {
+            Query = string.Empty,
+            Fragment = string.Empty
+        };
+        return builder.Uri.AbsoluteUri.TrimEnd('/');
     }
 
     private static long? TryFileLength(string? path)
