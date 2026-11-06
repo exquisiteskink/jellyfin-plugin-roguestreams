@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Jellyfin shows the
 `changelog` from `build.yaml` on each catalog version.
 
+## 1.3.0.0
+
+- Show the source tuner/device for every open live stream and live TV session
+- Distinguish HDHomeRun, M3U, and other registered Jellyfin tuner hosts
+- Mark streams whose tuner id is no longer present in Live TV configuration
+
 ## 1.2.0.0
 
 - Add HDHomeRun tuner settings with auto-detect, URL test, and explicit save

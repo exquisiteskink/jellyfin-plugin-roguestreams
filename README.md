@@ -19,14 +19,28 @@ which is the same path as `POST /LiveStreams/Close`.
 
 | Panel | Content |
 | --- | --- |
-| Open live streams | every stream in Jellyfin's open-stream map: name, liveStreamId, consumer count, viewers, recordings, cache file size |
+| Open live streams | every stream in Jellyfin's open-stream map: name, liveStreamId, source device/tuner, consumer count, viewers, recordings, cache file size |
 | Tuner leases | live HDHomeRun `/status.json` (optional): channel, name, target IP, bitrate |
 | Tuner settings | auto-detect HDHomeRun devices, confirm/test a URL, or disable tuner leases |
-| Watching now | live TV sessions with user, device, client, channel |
+| Watching now | live TV sessions with user, device, client, channel, and source tuner |
 | Recordings | in-progress DVR timers |
 
 Every listed stream has a **Close** button. If a viewer or recording is attached,
 the UI warns before closing.
+
+## Source device recognition
+
+Each open stream is matched by Jellyfin's `TunerHostId` against the configured
+Live TV tuner hosts. The UI shows the tuner kind and name, for example:
+
+- **HDHomeRun** — physical/network HDHomeRun tuner
+- **M3U tuner** — M3U/IPTV playlist tuner
+- any other registered Jellyfin tuner host (NextPVR, TVHeadend, Hauppauge, etc.)
+  using the display name that host reports to Jellyfin
+
+If a stream has a tuner id that is not in the Live TV configuration, it is marked
+**not in Live TV config**. If Jellyfin gives no tuner id at all, the plugin shows
+the internal stream type instead.
 
 ## How close works
 
@@ -80,8 +94,11 @@ To produce an installable package and manifest locally:
 
 ```bash
 pip install jprm
-jprm plugin build . --version 1.2.0.0 --output-dir ./artifact
-jprm repo add ./artifact/*.zip --output-dir ./repo
+mkdir -p ./artifact ./repo
+jprm plugin build . --version 1.3.0.0 --output ./artifact
+jprm repo init ./repo/manifest.json
+jprm repo add ./repo ./artifact/*.zip \
+  --url "https://exquisiteskink.github.io/jellyfin-plugin-roguestreams"
 ```
 
 ## Configuration

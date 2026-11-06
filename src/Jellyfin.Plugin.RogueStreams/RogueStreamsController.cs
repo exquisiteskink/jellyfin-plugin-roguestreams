@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
@@ -36,6 +37,21 @@ public sealed class LiveSessionInfo
     public string Channel { get; set; } = string.Empty;
     public string ItemName { get; set; } = string.Empty;
     public string? LiveStreamId { get; set; }
+    public string TunerHostId { get; set; } = string.Empty;
+    public TunerInfo? Tuner { get; set; }
+}
+
+public sealed class TunerInfo
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string Kind { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public int TunerCount { get; set; }
+    public bool Configured { get; set; }
 }
 
 public sealed class RecordingInfo
@@ -57,6 +73,8 @@ public sealed class LiveStreamRow
     public string LiveStreamId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string TunerHostId { get; set; } = string.Empty;
+    public string StreamType { get; set; } = string.Empty;
+    public TunerInfo? Tuner { get; set; }
     public int ConsumerCount { get; set; }
     public string? Path { get; set; }
     public long? FileBytes { get; set; }
@@ -120,6 +138,7 @@ public class RogueStreamsController : ControllerBase
     private readonly ISessionManager _sessionManager;
     private readonly ILiveTvManager _liveTvManager;
     private readonly ITunerHostManager _tunerHostManager;
+    private readonly IConfigurationManager _configurationManager;
     private readonly ILogger<RogueStreamsController> _logger;
 
     public RogueStreamsController(
@@ -127,12 +146,14 @@ public class RogueStreamsController : ControllerBase
         ISessionManager sessionManager,
         ILiveTvManager liveTvManager,
         ITunerHostManager tunerHostManager,
+        IConfigurationManager configurationManager,
         ILogger<RogueStreamsController> logger)
     {
         _mediaSourceManager = mediaSourceManager;
         _sessionManager = sessionManager;
         _liveTvManager = liveTvManager;
         _tunerHostManager = tunerHostManager;
+        _configurationManager = configurationManager;
         _logger = logger;
     }
 
@@ -284,6 +305,7 @@ public class RogueStreamsController : ControllerBase
     private async Task<StatusResult> BuildStatusAsync(CancellationToken ct)
     {
         var result = new StatusResult();
+        var configuredTuners = GetConfiguredTuners();
         var recordings = await GetActiveRecordingsAsync(ct).ConfigureAwait(false);
         result.Recordings = recordings;
 
@@ -334,6 +356,7 @@ public class RogueStreamsController : ControllerBase
             var path = source?.Path;
             var sessionName = result.Sessions
                 .FirstOrDefault(s => string.Equals(s.LiveStreamId, id, StringComparison.OrdinalIgnoreCase));
+            var tuner = ResolveTuner(stream, configuredTuners);
             result.Streams.Add(new LiveStreamRow
             {
                 LiveStreamId = id,
@@ -341,6 +364,8 @@ public class RogueStreamsController : ControllerBase
                     ? StreamName(source, stream)
                     : (sessionName?.Channel ?? sessionName?.ItemName ?? id),
                 TunerHostId = stream?.TunerHostId ?? string.Empty,
+                StreamType = stream?.GetType().Name ?? string.Empty,
+                Tuner = tuner,
                 ConsumerCount = stream?.ConsumerCount ?? 0,
                 Path = string.IsNullOrEmpty(path) ? null : Path.GetFileName(path),
                 FileBytes = TryFileLength(path),
@@ -358,6 +383,19 @@ public class RogueStreamsController : ControllerBase
             .OrderByDescending(s => s.InUse)
             .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        var streamsById = result.Streams
+            .Where(s => !string.IsNullOrEmpty(s.LiveStreamId))
+            .ToDictionary(s => s.LiveStreamId, StringComparer.OrdinalIgnoreCase);
+        foreach (var session in result.Sessions)
+        {
+            if (session.LiveStreamId is not null
+                && streamsById.TryGetValue(session.LiveStreamId, out var row))
+            {
+                session.TunerHostId = row.TunerHostId;
+                session.Tuner = row.Tuner;
+            }
+        }
 
         if (result.Streams.Count == 0)
         {
@@ -558,6 +596,128 @@ public class RogueStreamsController : ControllerBase
         {
             _logger.LogDebug(ex, "Rogue Streams: tuner status unavailable at {Url}", tunerUrl);
         }
+    }
+
+    private Dictionary<string, TunerInfo> GetConfiguredTuners()
+    {
+        var byId = new Dictionary<string, TunerInfo>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var typeNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in _tunerHostManager.GetTunerHostTypes())
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Id))
+                {
+                    typeNames[pair.Id] = pair.Name ?? pair.Id;
+                }
+            }
+
+            var options = _configurationManager.GetConfiguration<LiveTvOptions>("livetv");
+            foreach (var host in options?.TunerHosts ?? Array.Empty<TunerHostInfo>())
+            {
+                if (string.IsNullOrWhiteSpace(host.Id))
+                {
+                    continue;
+                }
+
+                byId[host.Id] = ToTunerInfo(host, typeNames);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Rogue Streams: could not read Live TV tuner configuration");
+        }
+
+        return byId;
+    }
+
+    private static TunerInfo ToTunerInfo(TunerHostInfo host, IReadOnlyDictionary<string, string> typeNames)
+    {
+        var type = host.Type ?? string.Empty;
+        var typeName = typeNames.TryGetValue(type, out var registeredName) && !string.IsNullOrWhiteSpace(registeredName)
+            ? registeredName
+            : type;
+        var source = host.Source ?? string.Empty;
+        var name = !string.IsNullOrWhiteSpace(host.FriendlyName)
+            ? host.FriendlyName
+            : (!string.IsNullOrWhiteSpace(typeName) ? typeName : "Tuner");
+
+        return new TunerInfo
+        {
+            Id = host.Id ?? string.Empty,
+            Name = name,
+            Type = type,
+            Kind = TunerKind(type, typeName, source),
+            Url = SafeTunerUrl(host.Url),
+            DeviceId = host.DeviceId ?? string.Empty,
+            Source = source,
+            TunerCount = host.TunerCount,
+            Configured = true
+        };
+    }
+
+    private static string TunerKind(string type, string typeName, string source)
+    {
+        if (string.Equals(type, "hdhomerun", StringComparison.OrdinalIgnoreCase))
+        {
+            return "HDHomeRun";
+        }
+
+        if (string.Equals(type, "m3u", StringComparison.OrdinalIgnoreCase))
+        {
+            return "M3U tuner";
+        }
+
+        if (!string.IsNullOrWhiteSpace(typeName))
+        {
+            return typeName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            return source;
+        }
+
+        return "Other tuner";
+    }
+
+    private static TunerInfo? ResolveTuner(ILiveStream? stream, IReadOnlyDictionary<string, TunerInfo> configured)
+    {
+        var id = stream?.TunerHostId;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        if (configured.TryGetValue(id, out var tuner))
+        {
+            return tuner;
+        }
+
+        return new TunerInfo
+        {
+            Id = id,
+            Name = "Unconfigured tuner",
+            Kind = "Unknown tuner",
+            Configured = false
+        };
+    }
+
+    private static string SafeTunerUrl(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        var value = raw.Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
+        {
+            return uri.Scheme + "://" + uri.Host + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port);
+        }
+
+        var fileName = Path.GetFileName(value);
+        return string.IsNullOrWhiteSpace(fileName) ? "local file" : fileName;
     }
 
     private static void AppendNote(StatusResult result, string note)

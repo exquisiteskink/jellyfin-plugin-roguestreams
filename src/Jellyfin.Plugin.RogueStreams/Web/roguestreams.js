@@ -62,6 +62,44 @@ export default function (view) {
         return view.querySelector('#' + id);
     }
 
+    function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function tunerHtml(row) {
+        var tuner = row && (row.tuner || row.Tuner);
+        var streamType = (row && (row.streamType || row.StreamType)) || '';
+        if (!tuner) {
+            return '<span style="opacity:.55;">' + (streamType ? esc(streamType) : 'unknown') + '</span>';
+        }
+
+        var kind = tuner.kind || tuner.Kind || tuner.type || tuner.Type || 'Tuner';
+        var name = tuner.name || tuner.Name || '';
+        var url = tuner.url || tuner.Url || '';
+        var configured = tuner.configured != null ? tuner.configured : tuner.Configured;
+        var bits = [];
+        if (name && name !== kind) {
+            bits.push(esc(name));
+        }
+        if (url) {
+            bits.push(esc(url));
+        }
+        if (streamType) {
+            bits.push(esc(streamType));
+        }
+
+        var html = '<div>' + esc(kind) + '</div>';
+        if (bits.length) {
+            html += '<div style="opacity:.6; font-size:.85em; word-break:break-word;">' + bits.join(' &middot; ') + '</div>';
+        }
+        if (configured === false) {
+            html += '<div style="color:#ff9b8a; font-size:.8em;">not in Live TV config</div>';
+        }
+        return html;
+    }
+
     function camel(name) {
         return name.charAt(0).toLowerCase() + name.slice(1);
     }
@@ -249,7 +287,7 @@ export default function (view) {
         var tb = q('rsStreams');
         tb.innerHTML = '';
         if (!streams.length) {
-            tb.innerHTML = '<tr><td colspan="5" style="padding:.5em .4em; opacity:.6;">No open live streams in this Jellyfin process.</td></tr>';
+            tb.innerHTML = '<tr><td colspan="6" style="padding:.5em .4em; opacity:.6;">No open live streams in this Jellyfin process.</td></tr>';
         }
         streams.forEach(function (s) {
             var tr = document.createElement('tr');
@@ -265,6 +303,7 @@ export default function (view) {
                     '<div>' + name + '</div>' +
                     '<div style="opacity:.5; font-size:.85em; word-break:break-all;">' + liveStreamId + '</div>' +
                 '</td>' +
+                '<td style="padding:.4em;">' + tunerHtml(s) + '</td>' +
                 '<td style="padding:.4em; opacity:.8;">' + consumers + '</td>' +
                 '<td style="padding:.4em;">' + who(s) + '</td>' +
                 '<td style="padding:.4em; opacity:.7;">' +
@@ -323,6 +362,7 @@ export default function (view) {
                 '<td style="padding:.3em .4em;">' + (s.user || s.User || '') + '</td>' +
                 '<td style="padding:.3em .4em; opacity:.7;">' + (s.device || s.Device || '') + '</td>' +
                 '<td style="padding:.3em .4em;">' + (s.channel || s.Channel || s.itemName || s.ItemName || '') + '</td>' +
+                '<td style="padding:.3em .4em;">' + tunerHtml(s) + '</td>' +
                 '<td style="padding:.3em .4em; opacity:.7;">' + (s.client || s.Client || '') + ' ' + (s.playMethod || s.PlayMethod || '') + '</td>';
             sn.appendChild(tr);
         });
